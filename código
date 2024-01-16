@@ -1,0 +1,117 @@
+import requests
+import pandas as pd
+import os
+from datetime import datetime
+import pytz
+
+def converter_data(api_data):
+    formato_api = "%Y-%m-%dT%H:%M:%S"
+    try:
+        api_data = api_data.split('.')[0]
+        
+        data_utc = datetime.strptime(api_data, formato_api)
+        data_utc = data_utc.replace(tzinfo=pytz.UTC)
+
+        # Convertendo para o fuso de Brasília
+        fuso_horario_brasilia = pytz.timezone('America/Sao_Paulo')
+        data_brasilia = data_utc.astimezone(fuso_horario_brasilia)
+
+        # Formato 'dia-mês-ano hora:minuto:segundo'
+        formato_desejado = "%d-%m-%Y %H:%M:%S"
+        data_formatada = data_brasilia.strftime(formato_desejado)
+
+        return data_formatada
+    except Exception as e:
+        print(f"Erro ao converter a data {api_data}: {e}")
+        return None
+    
+def obter_nome_empresa(item):
+    try:
+        # Verifica se 'clients' está presente no dicionário e se ele não está vazio
+        if 'clients' in item and item['clients']:
+            clients = item['clients']
+            
+            # Itera sobre a lista de clients
+            for client in clients:
+                # Verifica se 'organization' está presente no dicionário client e se não é nulo
+                if 'organization' in client and client['organization']:
+                    organization = client['organization']
+                    
+                    # Verifica se 'businessName' está presente e não é nulo
+                    if 'businessName' in organization and organization['businessName']:
+                        return organization['businessName']
+
+            # Se não encontrar em 'organization', tenta procurar em 'clients'
+            for client in clients:
+                # Verifica se 'businessName' está presente e não é nulo
+                if 'businessName' in client and client['businessName']:
+                    return client['businessName']
+
+        return None
+    except Exception as e:
+        print(f"Erro ao obter o nome da empresa: {e}")
+        return None
+
+# Lista de URLs e tokens correspondentes aos tickets desejados
+urls = [
+    "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'",
+    "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'",
+    "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'"
+]
+
+# Lista de nomes para as abas do Excel
+sheet_names = ["Empresa1", "Empresa2", "Empresa3"]
+
+# Caminho para salvar e o nome do arquivo
+excel_file_path = "Caminho que desejar salvar o arquivo"
+
+# Autenticação para usar a API
+with pd.ExcelWriter(excel_file_path, engine="openpyxl", mode="w") as writer:
+    for i, url in enumerate(urls):
+        headers = {
+            "Authorization": f"Bearer Token{i+1}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Lista para armazenar os dados
+            result = []
+
+            # Itera sobre os elementos da lista 'data'
+            for item in data:
+                data_formatada = converter_data(item['createdDate'])
+
+                nome_empresa = obter_nome_empresa(item)
+
+              # Cria um dicionário com as informações desejadas
+                entry = {
+                    'Data de criação': data_formatada,
+                    'Empresa': nome_empresa,
+                    'urgência': item['urgency'],
+                    'Status': item['baseStatus'],
+                    'tipo': item['type'],
+                    'Assunto': item['subject'],
+                    'categoria': item['category'],
+                    'protocolo': item['protocol'],
+                    'Agente': item['owner']['businessName'] if item['owner'] else None,
+                    'Cliente': item['createdBy']['businessName'] if item['createdBy'] else None,
+                    'Ações': item['actions'][0]['description'] if item['actions'] else None,
+                    'Cópia': item['cc'],
+                }
+
+                # Adiciona o dicionário à lista
+                result.append(entry)
+
+            # Converte a lista de dicionários em um DataFrame
+            df = pd.DataFrame(result)
+
+            # Adiciona uma nova aba ao Excel para cada URL
+            df.to_excel(writer, sheet_name=sheet_names[i], index=False)
+
+            print(f"Dados da URL {i+1} salvos em '{excel_file_path}', aba: {sheet_names[i]}")
+        else:
+            print(f"Erro {response.status_code} na URL {i+1}: {response.text}")
