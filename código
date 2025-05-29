@@ -4,19 +4,22 @@ import os
 from datetime import datetime
 import pytz
 
+# Converte data no formato UTC da API para o fuso horário de Brasília e com formato legível
 def converter_data(api_data):
     formato_api = "%Y-%m-%dT%H:%M:%S"
     try:
+        # Remove milissegundos, se existirem
         api_data = api_data.split('.')[0]
         
+        # Interpreta a data como UTC
         data_utc = datetime.strptime(api_data, formato_api)
         data_utc = data_utc.replace(tzinfo=pytz.UTC)
 
-        # Convertendo para o fuso de Brasília
+        # Converte para o fuso horário de Brasília
         fuso_horario_brasilia = pytz.timezone('America/Sao_Paulo')
         data_brasilia = data_utc.astimezone(fuso_horario_brasilia)
 
-        # Formato 'dia-mês-ano hora:minuto:segundo'
+        # Formata a data no padrão brasileiro
         formato_desejado = "%d-%m-%Y %H:%M:%S"
         data_formatada = data_brasilia.strftime(formato_desejado)
 
@@ -24,26 +27,23 @@ def converter_data(api_data):
     except Exception as e:
         print(f"Erro ao converter a data {api_data}: {e}")
         return None
-    
+
+# Extrai o nome da empresa do ticket, verificando em múltiplos níveis da estrutura JSON
 def obter_nome_empresa(item):
     try:
-        # Verifica se 'clients' está presente no dicionário e se ele não está vazio
+        # Verifica se existe o campo 'clients' e se ele não está vazio
         if 'clients' in item and item['clients']:
             clients = item['clients']
             
-            # Itera sobre a lista de clients
+            # Prioriza pegar a razão social da organização, se disponível
             for client in clients:
-                # Verifica se 'organization' está presente no dicionário client e se não é nulo
                 if 'organization' in client and client['organization']:
                     organization = client['organization']
-                    
-                    # Verifica se 'businessName' está presente e não é nulo
                     if 'businessName' in organization and organization['businessName']:
                         return organization['businessName']
 
-            # Se não encontrar em 'organization', tenta procurar em 'clients'
+            # Caso não haja organização, tenta pegar o nome direto do client
             for client in clients:
-                # Verifica se 'businessName' está presente e não é nulo
                 if 'businessName' in client and client['businessName']:
                     return client['businessName']
 
@@ -52,42 +52,43 @@ def obter_nome_empresa(item):
         print(f"Erro ao obter o nome da empresa: {e}")
         return None
 
-# Lista de URLs e tokens correspondentes aos tickets desejados
+# URLs da API Movidesk (1 por empresa ou cliente) com filtros e seleções definidos
 urls = [
     "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'",
     "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'",
     "https://api.movidesk.com/public/v1/tickets?token={Insira seu token aqui}&$select=baseStatus,subject,cc,type,urgency,category,protocol,createdDate&$expand=actions($select=description),owner($select=businessName),createdBy($select=businessName),clients($expand=organization($select=businessName))&$filter=baseStatus eq 'New' or baseStatus eq 'InAttendance' or baseStatus eq 'Stopped'"
 ]
 
-# Lista de nomes para as abas do Excel
+# Nome de cada aba da planilha, correspondente à URL acima
 sheet_names = ["Empresa1", "Empresa2", "Empresa3"]
 
-# Caminho para salvar e o nome do arquivo
+# Caminho de destino do arquivo Excel que será gerado
 excel_file_path = "Caminho que desejar salvar o arquivo"
 
-# Autenticação para usar a API
+# Inicia escrita no arquivo Excel com múltiplas abas
 with pd.ExcelWriter(excel_file_path, engine="openpyxl", mode="w") as writer:
+    # Itera sobre as URLs e nomes de abas simultaneamente
     for i, url in enumerate(urls):
         headers = {
-            "Authorization": f"Bearer Token{i+1}",
+            "Authorization": f"Bearer Token{i+1}",  # Token específico de cada empresa
             "Content-Type": "application/json"
         }
 
+        # Requisição GET à API Movidesk
         response = requests.get(url, headers=headers)
 
+        # Se a requisição for bem-sucedida
         if response.status_code == 200:
             data = response.json()
 
-            # Lista para armazenar os dados
-            result = []
+            result = []  # Lista para armazenar cada linha da planilha
 
-            # Itera sobre os elementos da lista 'data'
+            # Processa cada ticket retornado pela API
             for item in data:
-                data_formatada = converter_data(item['createdDate'])
+                data_formatada = converter_data(item['createdDate'])  # Converte data de criação
+                nome_empresa = obter_nome_empresa(item)  # Obtém nome da empresa cliente
 
-                nome_empresa = obter_nome_empresa(item)
-
-              # Cria um dicionário com as informações desejadas
+                # Organiza os dados em um dicionário (linha da planilha)
                 entry = {
                     'Data de criação': data_formatada,
                     'Empresa': nome_empresa,
@@ -103,13 +104,10 @@ with pd.ExcelWriter(excel_file_path, engine="openpyxl", mode="w") as writer:
                     'Cópia': item['cc'],
                 }
 
-                # Adiciona o dicionário à lista
-                result.append(entry)
+                result.append(entry)  # Adiciona ao conjunto de resultados
 
-            # Converte a lista de dicionários em um DataFrame
+            # Converte a lista de dicionários em DataFrame e escreve na aba correspondente
             df = pd.DataFrame(result)
-
-            # Adiciona uma nova aba ao Excel para cada URL
             df.to_excel(writer, sheet_name=sheet_names[i], index=False)
 
             print(f"Dados da URL {i+1} salvos em '{excel_file_path}', aba: {sheet_names[i]}")
